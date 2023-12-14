@@ -1,0 +1,9 @@
+# since i started the project maelstom zip file
+# ignore the maelstrom binary and some related folders
+maelstrom
+lib/
+doc/
+demo/
+
+# Mac files
+.DS_Store
