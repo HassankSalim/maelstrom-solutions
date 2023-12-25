@@ -35,6 +35,9 @@ func main() {
 			"message": messageVal,
 		}
 		for _, neighbour := range neigbhourNodes {
+			if neighbour == msg.Src {
+				continue
+			}
 			n.RPC(neighbour, gossipReqBody, func(msg maelstrom.Message) error { logger.Printf("Message sent to %s", neighbour); return nil })
 		}
 		delete(body, "message")
