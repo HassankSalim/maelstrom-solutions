@@ -3,15 +3,58 @@ package main
 import (
 	"encoding/json"
 	"log"
+	"math/rand"
 	"os"
 
 	maelstrom "github.com/jepsen-io/maelstrom/demo/go"
 )
 
+func getRandomPeerNodes(allNodes []string, n int) []string {
+	// Seed the random number generator with the current time
+	// rand.Seed(time.Now().UnixNano())
+
+	// Create a copy of the input array to avoid modifying the original
+	allNodesCopy := make([]string, len(allNodes))
+	copy(allNodesCopy, allNodes)
+
+	// Use a loop to select random elements
+	randomElements := make([]string, n)
+	for i := 0; i < n; i++ {
+		randomIndex := rand.Intn(len(allNodesCopy))
+		randomElements[i] = allNodesCopy[randomIndex]
+
+		// Remove the selected element to avoid duplicates
+		// (if you want to allow duplicates, you can skip this step)
+		allNodesCopy = append(allNodesCopy[:randomIndex], allNodesCopy[randomIndex+1:]...)
+	}
+
+	return randomElements
+}
+
+func removeNodeFromAllNodes(allNodes []string, nodeToBeRemoved string) []string {
+	allNodesCopy := make([]string, len(allNodes))
+	copy(allNodesCopy, allNodes)
+	// Find the index of the element to remove
+	indexToRemove := -1
+	for i, element := range allNodesCopy {
+		if element == nodeToBeRemoved {
+			indexToRemove = i
+			break
+		}
+	}
+
+	// If the element is found, remove it from the array
+	if indexToRemove != -1 {
+		allNodesCopy = append(allNodesCopy[:indexToRemove], allNodesCopy[indexToRemove+1:]...)
+	}
+
+	return allNodesCopy
+}
+
 func main() {
 	n := maelstrom.NewNode()
 	messages := []float64{}
-	neigbhourNodes := []string{}
+	allNodes := []string{}
 
 	n.Handle("broadcast", func(msg maelstrom.Message) error {
 		logger := log.New(os.Stderr, "", log.Ltime)
@@ -26,18 +69,25 @@ func main() {
 		if !ok {
 			panic("message is not a number")
 		}
-		messages = append(messages, messageVal)
-		// Update the message type to return back.
-		body["type"] = "broadcast_ok"
 
+		body["type"] = "broadcast_ok"
+		for _, message := range messages {
+			if message == messageVal {
+				delete(body, "message")
+				return n.Reply(msg, body)
+			}
+		}
+
+		messages = append(messages, messageVal)
 		gossipReqBody := map[string]interface{}{
 			"type":    "broadcast",
 			"message": messageVal,
 		}
-		for _, neighbour := range neigbhourNodes {
-			if neighbour == msg.Src {
-				continue
-			}
+		possiblePeerNodes := removeNodeFromAllNodes(allNodes, msg.Src)
+		peerNodes := getRandomPeerNodes(possiblePeerNodes, len(possiblePeerNodes))
+
+		logger.Printf("Peer Nodes %v", peerNodes)
+		for _, neighbour := range peerNodes {
 			n.RPC(neighbour, gossipReqBody, func(msg maelstrom.Message) error { logger.Printf("Message sent to %s", neighbour); return nil })
 		}
 		delete(body, "message")
@@ -71,15 +121,13 @@ func main() {
 
 		// Update the message type to return back.
 		nodeID := n.ID()
-		topology, _ := body["topology"].(map[string]interface{})
-
-		neighbourVals, _ := topology[nodeID].([]interface{})
-		for _, neighbourVal := range neighbourVals {
-			if val, ok := neighbourVal.(string); ok {
-				neigbhourNodes = append(neigbhourNodes, val)
+		for _, node := range n.NodeIDs() {
+			if node == nodeID {
+				continue
 			}
+			allNodes = append(allNodes, node)
 		}
-		logger.Printf("Node %s has Neigbhours: %s", nodeID, neigbhourNodes)
+		logger.Printf("All Nodes %v", allNodes)
 
 		body["type"] = "topology_ok"
 		delete(body, "topology")
