@@ -5,6 +5,7 @@ import (
 	"log"
 	"math/rand"
 	"os"
+	"time"
 
 	maelstrom "github.com/jepsen-io/maelstrom/demo/go"
 )
@@ -51,10 +52,55 @@ func removeNodeFromAllNodes(allNodes []string, nodeToBeRemoved string) []string 
 	return allNodesCopy
 }
 
+func mergeDataFromOtherNodes(n *maelstrom.Node, messages *[]float64, ticker *time.Ticker) {
+	allNodes := getAllNodes(n)
+	for {
+		<-ticker.C
+		dest := getRandomPeerNodes(allNodes, 1)[0]
+		readBody := map[string]interface{}{
+			"type": "read",
+		}
+		n.RPC(dest, readBody, func(msg maelstrom.Message) error {
+			var body map[string]any
+			if err := json.Unmarshal(msg.Body, &body); err != nil {
+				return err
+			}
+			messageVals := body["messages"].([]interface{})
+			for _, messageVal := range messageVals {
+				message := messageVal.(float64)
+				messageValExists := false
+				for _, val := range *messages {
+					if val == message {
+						messageValExists = true
+						break
+					}
+				}
+				if !messageValExists {
+					*messages = append(*messages, message)
+				}
+			}
+			return nil
+		})
+	}
+}
+
+func getAllNodes(n *maelstrom.Node) []string {
+	allNodes := []string{}
+	nodeID := n.ID()
+	for _, node := range n.NodeIDs() {
+		if node == nodeID {
+			continue
+		}
+		allNodes = append(allNodes, node)
+	}
+	return allNodes
+}
+
 func main() {
 	n := maelstrom.NewNode()
 	messages := []float64{}
 	allNodes := []string{}
+	ticker := time.NewTicker(1 * time.Second)
 
 	n.Handle("broadcast", func(msg maelstrom.Message) error {
 		logger := log.New(os.Stderr, "", log.Ltime)
@@ -88,7 +134,10 @@ func main() {
 
 		logger.Printf("Peer Nodes %v", peerNodes)
 		for _, neighbour := range peerNodes {
-			n.RPC(neighbour, gossipReqBody, func(msg maelstrom.Message) error { logger.Printf("Message sent to %s", neighbour); return nil })
+			n.RPC(neighbour, gossipReqBody, func(msg maelstrom.Message) error {
+				logger.Printf("Message sent to %s", neighbour)
+				return nil
+			})
 		}
 		delete(body, "message")
 
@@ -120,13 +169,9 @@ func main() {
 		}
 
 		// Update the message type to return back.
-		nodeID := n.ID()
-		for _, node := range n.NodeIDs() {
-			if node == nodeID {
-				continue
-			}
-			allNodes = append(allNodes, node)
-		}
+		allNodes = getAllNodes(n)
+		go mergeDataFromOtherNodes(n, &messages, ticker)
+
 		logger.Printf("All Nodes %v", allNodes)
 
 		body["type"] = "topology_ok"
@@ -137,6 +182,7 @@ func main() {
 	})
 
 	if err := n.Run(); err != nil {
+		ticker.Stop()
 		log.Printf("ERROR: %s", err)
 		os.Exit(1)
 	}
